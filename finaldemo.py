@@ -12,7 +12,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 
 import streamlit as st
-MASTER_GROQ_API_KEY = st.secrets["GROQ_API_KEY"]git add .
+MASTER_GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 
 CLIENT_CONFIG = {
