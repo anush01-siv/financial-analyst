@@ -70,28 +70,40 @@ def retrieve_docs(state: GraphState):
     return {"context_docs": doc_texts}
 
 def execute_math_logic(state: GraphState):
+    print("---NODE: COMPUTE PROMPT LAYER---")
     question = state["question"]
     retriever = state["retriever"]
     llm = state["llm"]
     
-    fetched_docs = retriever.invoke(question)
-    doc_texts = [doc.page_content for doc in fetched_docs]
+    # Check if the user is passing numbers directly in the prompt string
+    has_explicit_numbers = any(char.isdigit() for char in question)
+    
+    # UPGRADE: If user gives numbers, skip vector retrieval entirely to prevent context pollution!
+    if has_explicit_numbers:
+        doc_texts = ["No document context required. Execute calculations using the numeric variables provided directly by the user in their prompt query sentence."]
+    else:
+        # Standard flow: pull raw values out of the uploaded file
+        fetched_docs = retriever.invoke(question)
+        doc_texts = [doc.page_content for doc in fetched_docs]
     
     math_system_prompt = (
-        "You are a forensic financial auditor. Calculate metrics based strictly on numeric values found in the context.\n"
+        "You are a forensic financial auditor. Calculate metrics based strictly on numeric values found in the context or provided directly by the user.\n"
         "1. Identify the exact numbers required.\n"
-        "2. State the arithmetic formula explicitly using clean, standard plain text characters (e.g., Use '/' for division, '*' for multiplication, and '=' for equals). \n"
-        "3. CRITICAL: Do NOT use LaTeX formulas, do NOT use strings like '\\frac', '\\text', '\\div', or square brackets like '[ ]'. Write math naturally as clean text.\n"
+        "2. State the arithmetic formula explicitly using clean, standard plain text characters (e.g., '/' and '*').\n"
+        "3. CRITICAL: Do NOT use LaTeX formulas or strings like '\\frac' or '\\text'. Write math naturally as clean text.\n"
         "4. Show calculations step-by-step with the raw numbers.\n\n"
         "Context:\n{context}"
     )
+    
     math_prompt = ChatPromptTemplate.from_messages([
         ("system", math_system_prompt),
         ("human", "{input}")
     ])
+    
     math_chain = math_prompt | llm | StrOutputParser()
     result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     return {"generation": result, "context_docs": doc_texts}
+
 
 def generate_standard_answer(state: GraphState):
     if state.get("generation"):
