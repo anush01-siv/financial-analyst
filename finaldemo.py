@@ -11,7 +11,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 
-MASTER_GROQ_API_KEY = ("YOUR_GROQ_API_KEY_HERE")
+import streamlit as st
+MASTER_GROQ_API_KEY = st.secrets["GROQ_API_KEY"]git add .
 
 
 CLIENT_CONFIG = {
