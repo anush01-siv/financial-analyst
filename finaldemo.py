@@ -1,6 +1,7 @@
 import streamlit as st
 import tempfile
 import os
+import re
 from typing import List, TypedDict
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import MarkdownTextSplitter
@@ -10,7 +11,7 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
-import re
+
 # --- 1. ENTRY POINT PAGE CONFIG & ENTERPRISE CSS INJECTION ---
 st.set_page_config(
     page_title="MatrixAnalyst Pro | Enterprise Console",
@@ -178,7 +179,7 @@ def execute_math_logic(state: GraphState):
         doc_texts = [doc.page_content for doc in fetched_docs]
     
     math_system_prompt = (
-        "You are a forensic financial auditor. Write all mathematical expressions using plain text arithmetic only.\n"
+        "You are a forensic financial auditor. Write all mathematical expressions using clean, plain text arithmetic only.\n"
         "Do NOT use LaTeX keywords like \\frac, \\text, or square bracket math blocks [\n\n"
         "Context:\n{context}"
     )
@@ -191,19 +192,35 @@ def execute_math_logic(state: GraphState):
     math_chain = math_prompt | llm | StrOutputParser()
     raw_result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     
-    # --- HARDENED FAILSAFE CLEANER ---
-    # 1. Convert \frac{A}{B} to (A / B)
+    # --- HARDENED FAILSAFE CLEANER (Strips LaTeX tags before rendering) ---
     clean_result = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1 / \2)', raw_result)
-    # 2. Strip out \text{...} wrappers
     clean_result = re.sub(r'\\text\{([^}]+)\}', r'\1', clean_result)
-    # 3. Clean remaining LaTeX keywords like \times, \div, \quad
     clean_result = clean_result.replace(r'\times', '*').replace(r'\div', '/').replace(r'\quad', ' ')
-    # 4. Remove opening/closing bracket blocks [\ and ]
     clean_result = re.sub(r'\[\s*\\?', '', clean_result)
     clean_result = re.sub(r'\\?\s*\]', '', clean_result)
     
     return {"generation": clean_result, "context_docs": doc_texts}
 
+def generate_standard_answer(state: GraphState):
+    if state.get("generation"):
+        return state
+    question = state["question"]
+    context = "\n\n".join(state["context_docs"])
+    llm = state["llm"]
+    
+    system_prompt = (
+        "You are an expert corporate financial analyst. Answer the user's question using "
+        "only the provided context. If you do not know, say it is not explicitly stated.\n\nContext:\n{context}"
+    )
+    standard_prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("human", "{input}"),
+    ])
+    standard_chain = standard_prompt | llm | StrOutputParser()
+    ai_response = standard_chain.invoke({"context": context, "input": question})
+    return {"generation": ai_response}
+
+# --- 4. COMPILE LANGGRAPH ---
 workflow = StateGraph(GraphState)
 workflow.add_node("document_retriever", retrieve_docs)
 workflow.add_node("math_processor", execute_math_logic)
@@ -214,7 +231,7 @@ workflow.add_edge("math_processor", "answer_generator")
 workflow.add_edge("answer_generator", END)
 compiled_rag_graph = workflow.compile()
 
-# --- 4. AUTHENTICATION & APP ROUTING ---
+# --- 5. AUTHENTICATION & APP ROUTING ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "auth_dept" not in st.session_state:
