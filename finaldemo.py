@@ -165,39 +165,34 @@ def retrieve_docs(state: GraphState):
     doc_texts = [doc.page_content for doc in fetched_docs]
     return {"context_docs": doc_texts}
 
+import re
+
 def sanitize_latex_output(text: str) -> str:
     """
-    Universal LaTeX Sanitizer for Streamlit KaTeX.
-    Converts all raw LaTeX bracket blocks [ ... ] into native Streamlit KaTeX $$ ... $$ blocks.
+    Bulletproof LaTeX Sanitizer:
+    Converts raw bracket LaTeX blocks into native Streamlit KaTeX ($$...$$) blocks.
     """
     if not text:
         return ""
 
-    # 1. Convert any bracketed LaTeX display block [\begin{aligned} ... \end{aligned}] to $$ \begin{aligned} ... \end{aligned} $$
-    text = re.sub(
-        r'\[\s*(\\begin\{aligned\}.*?\\end\{aligned\})\s*\]',
-        r'\n\n$$\1$$\n\n',
-        text,
-        flags=re.DOTALL
-    )
+    # 1. Clean LaTeX formatting artifacts
+    text = text.replace('{,}', ',').replace(';-;', '-')
 
-    # 2. Convert standard math brackets [ \text{...} ] or [ \frac{...} ] into $$ ... $$
-    text = re.sub(
-        r'\[\s*(\\text|\\frac|\\left|\\boxed|[0-9\.\,]+\s*\\times|\\begin).*?\s*\]',
-        lambda m: f"\n\n$${m.group(0).strip('[] ')}$$\n\n",
-        text,
-        flags=re.DOTALL
-    )
+    # 2. Convert explicit escaped LaTeX brackets \[ ... \] to $$ ... $$
+    text = text.replace(r'\[', '\n\n$$\n').replace(r'\]', '\n$$\n\n')
 
-    # 3. Handle leftover bracket math expressions like [ 0.2623 \times 100 = 26.23% ]
-    text = re.sub(
-        r'\[\s*([^\]\n]*?(?:\\|\+|\-|\*|\/|=|\%)[^\]\n]*?)\s*\]',
-        lambda m: f"\n\n$${m.group(1).strip()}$$\n\n",
-        text
-    )
+    # 3. Convert any raw [ ... ] blocks containing LaTeX macros (\begin, \text, \frac, etc.) to $$ ... $$
+    def replace_bracket_with_katex(match):
+        inner = match.group(1).strip()
+        return f"\n\n$${inner}$$\n\n"
 
-    # 4. Clean up KaTeX comma artifacts {,} -> ,
-    text = text.replace('{,}', ',')
+    # Match brackets enclosing LaTeX commands or equations
+    text = re.sub(r'\[\s*(\\begin\{aligned\}.*?\\end\{aligned\})\s*\]', replace_bracket_with_katex, text, flags=re.DOTALL)
+    text = re.sub(r'\[\s*(.*?\\[a-zA-Z].*?)\s*\]', replace_bracket_with_katex, text, flags=re.DOTALL)
+    text = re.sub(r'\[\s*(.*?(?:=|\+|\-|\*|\/|%|\approx).*?)\s*\]', replace_bracket_with_katex, text, flags=re.DOTALL)
+
+    # 4. Collapse any accidental extra newline stacks
+    text = re.sub(r'\n{3,}', '\n\n', text)
 
     return text.strip()
 
@@ -228,7 +223,7 @@ def execute_math_logic(state: GraphState):
     math_chain = math_prompt | llm | StrOutputParser()
     raw_result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     
-    # --- UNIVERSAL BOUNDARY SANITIZATION ---
+    # Clean output through the multi-pass sanitizer
     clean_result = sanitize_latex_output(raw_result)
     
     return {"generation": clean_result, "context_docs": doc_texts}
