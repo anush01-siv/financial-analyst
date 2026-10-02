@@ -166,23 +166,35 @@ def retrieve_docs(state: GraphState):
     return {"context_docs": doc_texts}
 
 def sanitize_latex_output(text: str) -> str:
-    """Bulletproof post-processor to turn raw LaTeX bracket blocks into Streamlit KaTeX."""
-    # 1. Convert any bracket block containing LaTeX or arithmetic into $$ ... $$
-    # Matches [ ... ] containing backslashes, numbers, or equals signs
-    def replace_bracket_block(match):
-        content = match.group(1).strip()
-        # Clean up LaTeX bracket artifact syntax
-        content = content.replace('{,}', ',')
-        content = content.replace(';-;', '-')
-        return f"\n\n$${content}$$\n\n"
+    """Strips raw LaTeX markup and brackets, transforming math outputs into clean Markdown text."""
+    if not text:
+        return ""
 
-    # Match anything starting with '[' and ending with ']' that has math operators or backslashes
-    cleaned = re.sub(r'\[\s*([^\]\n]*?(?:\\|\+|\-|\*|\/|=)[^\]\n]*?)\s*\]', replace_bracket_block, text)
+    # 1. Convert LaTeX fractions \frac{A}{B} or \\frac{A}{B} to (A / B)
+    text = re.sub(r'\\+frac\{([^}]+)\}\{([^}]+)\}', r'(\1 / \2)', text)
     
-    # 2. Safety cleanup for standalone LaTeX keywords if any leaked outside brackets
-    cleaned = cleaned.replace(r'\times', '*').replace(r'\approx', '≈')
-    
-    return cleaned
+    # 2. Convert \boxed{X} or \\boxed{X} to **X**
+    text = re.sub(r'\\+boxed\{([^}]+)\}', r'**\1**', text)
+
+    # 3. Strip out \text{X} or \\text{X} wrappers
+    text = re.sub(r'\\+text\{([^}]+)\}', r'\1', text)
+
+    # 4. Remove LaTeX bracket wrappers like [ ... ] or \[ ... \]
+    text = re.sub(r'\\?\[\s*', '', text)
+    text = re.sub(r'\s*\\?\]', '', text)
+
+    # 5. Clean LaTeX spacing and operation artifacts
+    text = text.replace('{,}', ',')
+    text = re.sub(r'\\+times', '*', text)
+    text = re.sub(r'\\+approx', '≈', text)
+    text = re.sub(r'\\+div', '/', text)
+    text = re.sub(r'\\+quad', ' ', text)
+
+    # 6. Normalize double backslashes
+    text = text.replace('\\', '')
+
+    return text.strip()
+
 
 def execute_math_logic(state: GraphState):
     question = state["question"]
@@ -197,8 +209,10 @@ def execute_math_logic(state: GraphState):
         fetched_docs = retriever.invoke(question)
         doc_texts = [doc.page_content for doc in fetched_docs]
     
+    # Force system prompt to ask for plain arithmetic text
     math_system_prompt = (
-        "You are a forensic financial auditor. Perform step-by-step financial calculations based on the provided context.\n\n"
+        "You are a forensic financial auditor. Perform step-by-step calculations.\n"
+        "Do NOT use LaTeX symbols, backslashes, or bracket math blocks. Use plain text formatting only.\n\n"
         "Context:\n{context}"
     )
     
@@ -210,7 +224,7 @@ def execute_math_logic(state: GraphState):
     math_chain = math_prompt | llm | StrOutputParser()
     raw_result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     
-    # --- APPLY BULLETPROOF SANITIZER ---
+    # Pass response through the multi-pass sanitizer
     clean_result = sanitize_latex_output(raw_result)
     
     return {"generation": clean_result, "context_docs": doc_texts}
