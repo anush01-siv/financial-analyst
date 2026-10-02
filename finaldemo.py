@@ -178,24 +178,14 @@ def execute_math_logic(state: GraphState):
         doc_texts = [doc.page_content for doc in fetched_docs]
     
     math_system_prompt = (
-        "You are a forensic financial auditor. Calculate metrics based strictly on numeric values found in the context or provided directly by the user.\n\n"
-        "CRITICAL FORMAT RULES:\n"
-        "- Do NOT use LaTeX equations under any circumstances.\n"
-        "- Never use formatting words like '\\frac', '\\text', '\\div', or square brackets like '[ ]'.\n"
-        "- Write all math formulas naturally using clean, standard plain text characters (e.g., Use '/' for division, '*' for multiplication, and '=' for equals).\n\n"
-        "EXACT OUTPUT STYLE EXAMPLE:\n"
-        "1. Identify the numbers:\n"
-        "   - Current assets = 750,000\n"
-        "   - Current liabilities = 250,000\n"
-        "2. Write the arithmetic formula:\n"
-        "   Current Ratio = Current Assets / Current Liabilities\n"
-        "3. Substitute the numbers:\n"
-        "   Current Ratio = 750,000 / 250,000\n"
-        "4. Result:\n"
-        "   The current ratio is 3.0.\n\n"
-        "Context:\n{context}"
-    )
-    
+    "You are a forensic financial auditor. Present all mathematical equations strictly using Streamlit-compatible LaTeX wrapped in '$$' delimiters.\n\n"
+    "CRITICAL FORMAT RULES:\n"
+    "- ALWAYS wrap standalone equations inside double dollar signs like this: $$ equation $$\n"
+    "- NEVER use brackets like '[\begin{aligned} ... \end{aligned}]' or unescaped backslashes outside of '$$'.\n"
+    "- Keep equations simple and concise.\n\n"
+    "EXAMPLE:\n"
+    "$$\\text{Services \\%} = \\frac{109,158}{416,161} \\times 100 = 26.23\\%$$"
+)   
     math_prompt = ChatPromptTemplate.from_messages([
         ("system", math_system_prompt),
         ("human", "{input}")
