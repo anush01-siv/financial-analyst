@@ -165,6 +165,25 @@ def retrieve_docs(state: GraphState):
     doc_texts = [doc.page_content for doc in fetched_docs]
     return {"context_docs": doc_texts}
 
+def sanitize_latex_output(text: str) -> str:
+    """Bulletproof post-processor to turn raw LaTeX bracket blocks into Streamlit KaTeX."""
+    # 1. Convert any bracket block containing LaTeX or arithmetic into $$ ... $$
+    # Matches [ ... ] containing backslashes, numbers, or equals signs
+    def replace_bracket_block(match):
+        content = match.group(1).strip()
+        # Clean up LaTeX bracket artifact syntax
+        content = content.replace('{,}', ',')
+        content = content.replace(';-;', '-')
+        return f"\n\n$${content}$$\n\n"
+
+    # Match anything starting with '[' and ending with ']' that has math operators or backslashes
+    cleaned = re.sub(r'\[\s*([^\]\n]*?(?:\\|\+|\-|\*|\/|=)[^\]\n]*?)\s*\]', replace_bracket_block, text)
+    
+    # 2. Safety cleanup for standalone LaTeX keywords if any leaked outside brackets
+    cleaned = cleaned.replace(r'\times', '*').replace(r'\approx', '≈')
+    
+    return cleaned
+
 def execute_math_logic(state: GraphState):
     question = state["question"]
     retriever = state["retriever"]
@@ -191,18 +210,11 @@ def execute_math_logic(state: GraphState):
     math_chain = math_prompt | llm | StrOutputParser()
     raw_result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     
-    # --- AUTO-CONVERT RAW LATEX TO STREAMLIT KATEX ($$...$$) ---
-    # 1. Convert [ \text{...} ] or [ \frac{...} ] into $$ \text{...} $$
-    clean_result = re.sub(r'\[\s*(\\text|\\frac|\\left|0\.)', r'$$\1', raw_result)
-    clean_result = re.sub(r'(\\approx[^\\]*|\\times[^\\]*|\])\s*\]', r'\1$$', clean_result)
-    
-    # 2. Catch any lingering bracket-enclosed math blocks
-    clean_result = re.sub(r'\[\s*([^\]\n]+\\[^\]\n]+)\s*\]', r'$$\1$$', clean_result)
-    
-    # 3. Clean up inner number comma formatting tags {,} -> ,
-    clean_result = clean_result.replace('{,}', ',')
+    # --- APPLY BULLETPROOF SANITIZER ---
+    clean_result = sanitize_latex_output(raw_result)
     
     return {"generation": clean_result, "context_docs": doc_texts}
+
 def generate_standard_answer(state: GraphState):
     if state.get("generation"):
         return state
