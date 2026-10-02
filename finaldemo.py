@@ -179,8 +179,7 @@ def execute_math_logic(state: GraphState):
         doc_texts = [doc.page_content for doc in fetched_docs]
     
     math_system_prompt = (
-        "You are a forensic financial auditor. Write all mathematical expressions using clean, plain text arithmetic only.\n"
-        "Do NOT use LaTeX keywords like \\frac, \\text, or square bracket math blocks [\n\n"
+        "You are a forensic financial auditor. Perform step-by-step financial calculations based on the provided context.\n\n"
         "Context:\n{context}"
     )
     
@@ -192,15 +191,18 @@ def execute_math_logic(state: GraphState):
     math_chain = math_prompt | llm | StrOutputParser()
     raw_result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     
-    # --- HARDENED FAILSAFE CLEANER (Strips LaTeX tags before rendering) ---
-    clean_result = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1 / \2)', raw_result)
-    clean_result = re.sub(r'\\text\{([^}]+)\}', r'\1', clean_result)
-    clean_result = clean_result.replace(r'\times', '*').replace(r'\div', '/').replace(r'\quad', ' ')
-    clean_result = re.sub(r'\[\s*\\?', '', clean_result)
-    clean_result = re.sub(r'\\?\s*\]', '', clean_result)
+    # --- AUTO-CONVERT RAW LATEX TO STREAMLIT KATEX ($$...$$) ---
+    # 1. Convert [ \text{...} ] or [ \frac{...} ] into $$ \text{...} $$
+    clean_result = re.sub(r'\[\s*(\\text|\\frac|\\left|0\.)', r'$$\1', raw_result)
+    clean_result = re.sub(r'(\\approx[^\\]*|\\times[^\\]*|\])\s*\]', r'\1$$', clean_result)
+    
+    # 2. Catch any lingering bracket-enclosed math blocks
+    clean_result = re.sub(r'\[\s*([^\]\n]+\\[^\]\n]+)\s*\]', r'$$\1$$', clean_result)
+    
+    # 3. Clean up inner number comma formatting tags {,} -> ,
+    clean_result = clean_result.replace('{,}', ',')
     
     return {"generation": clean_result, "context_docs": doc_texts}
-
 def generate_standard_answer(state: GraphState):
     if state.get("generation"):
         return state
