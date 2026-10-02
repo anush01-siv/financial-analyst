@@ -11,9 +11,81 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 
-import streamlit as st
-MASTER_GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+# --- 1. ENTRY POINT PAGE CONFIG & ENTERPRISE CSS INJECTION ---
+st.set_page_config(
+    page_title="MatrixAnalyst Pro | Enterprise Console",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# Strip out all Streamlit default headers, footers, menus, and hosting artifacts
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden !important;}
+    header {visibility: hidden !important;}
+    footer {visibility: hidden !important;}
+    div[data-testid="stDecoration"] {display: none !important;}
+    div[data-testid="stHeader"] {display: none !important;}
+    
+    .stApp { 
+        background-color: #0B0F19 !important; 
+        color: #E2E8F0 !important; 
+    }
+    
+    [data-testid='stSidebar'] { 
+        background-color: #161F30 !important; 
+        border-right: 1px solid #1E293B !important; 
+    }
+    
+    .stChatInputContainer { 
+        border-radius: 12px !important; 
+        border: 1px solid #00E5FF !important; 
+        background-color: #161F30 !important; 
+    }
+    
+    .main-title { 
+        background: linear-gradient(90deg, #00E5FF, #8644FF); 
+        -webkit-background-clip: text; 
+        -webkit-text-fill-color: transparent; 
+        font-weight: 800; 
+        font-size: 2.8rem; 
+        margin-bottom: 0rem; 
+    }
+    
+    .sub-title { 
+        color: #94A3B8; 
+        font-size: 1.1rem; 
+        font-style: italic; 
+        margin-top: -0.5rem; 
+        margin-bottom: 2rem; 
+    }
+    
+    .profile-box { 
+        background-color: #1E293B; 
+        padding: 12px; 
+        border-radius: 8px; 
+        border-left: 4px solid #00E5FF; 
+        margin-bottom: 15px; 
+        font-family: monospace; 
+    }
+
+    /* Style Close Session button for high-contrast alert state */
+    div.stButton > button[kind="secondary"] {
+        border: 1px solid #ff4b4b !important;
+        color: #ff4b4b !important;
+        font-weight: 600 !important;
+        background-color: transparent !important;
+    }
+    
+    div.stButton > button[kind="secondary"]:hover {
+        background-color: #ff4b4b !important;
+        color: white !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+MASTER_GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 CLIENT_CONFIG = {
     "APP_TITLE": "MatrixAnalyst Pro",
@@ -34,11 +106,29 @@ class GraphState(TypedDict):
     context_docs: List[str]
     generation: str
 
+# --- 2. EPHEMERAL STATE & PURGE SYSTEM ---
+def purge_secure_session():
+    """Wipes all session state, clears cached files, and forces a full app reset."""
+    if "active_temp_file" in st.session_state and st.session_state.active_temp_file:
+        if os.path.exists(st.session_state.active_temp_file):
+            try:
+                os.remove(st.session_state.active_temp_file)
+            except Exception:
+                pass
+
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+        
+    st.cache_resource.clear()
+    st.rerun()
+
 @st.cache_resource(show_spinner=False)
 def process_pdf(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tf:
         tf.write(uploaded_file.getbuffer())
         file_path = tf.name
+    
+    st.session_state.active_temp_file = file_path
     
     loader = PyPDFLoader(file_path)
     docs = loader.load()
@@ -48,9 +138,14 @@ def process_pdf(uploaded_file):
     
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vectorstore = FAISS.from_documents(splits, embeddings)
-    os.remove(file_path)
+    
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        st.session_state.active_temp_file = None
+        
     return vectorstore.as_retriever(search_kwargs={"k": 4})
 
+# --- 3. LANGGRAPH WORKFLOW NODES ---
 def route_question(state: GraphState):
     question = state["question"].lower()
     has_explicit_numbers = any(char.isdigit() for char in question)
@@ -70,19 +165,15 @@ def retrieve_docs(state: GraphState):
     return {"context_docs": doc_texts}
 
 def execute_math_logic(state: GraphState):
-    print("---NODE: COMPUTE PROMPT LAYER---")
     question = state["question"]
     retriever = state["retriever"]
     llm = state["llm"]
     
-    # Check if the user is passing numbers directly in the prompt string
     has_explicit_numbers = any(char.isdigit() for char in question)
     
-    # UPGRADE: If user gives numbers, skip vector retrieval entirely to prevent context pollution!
     if has_explicit_numbers:
         doc_texts = ["No document context required. Execute calculations using the numeric variables provided directly by the user in their prompt query sentence."]
     else:
-        # Standard flow: pull raw values out of the uploaded file
         fetched_docs = retriever.invoke(question)
         doc_texts = [doc.page_content for doc in fetched_docs]
     
@@ -114,7 +205,6 @@ def execute_math_logic(state: GraphState):
     result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     return {"generation": result, "context_docs": doc_texts}
 
-
 def generate_standard_answer(state: GraphState):
     if state.get("generation"):
         return state
@@ -144,35 +234,33 @@ workflow.add_edge("math_processor", "answer_generator")
 workflow.add_edge("answer_generator", END)
 compiled_rag_graph = workflow.compile()
 
+# --- 4. AUTHENTICATION & APP ROUTING ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "auth_dept" not in st.session_state:
     st.session_state.auth_dept = ""
 
 if not st.session_state.authenticated:
-    st.set_page_config(page_title="Secure Workspace Access", layout="centered")
-    st.markdown("<style>.stApp { background-color: #0B0F19 !important; color: #E2E8F0 !important; } .stButton>button { background-color: #8644FF !important; color: white !important; border-radius: 8px !important; }</style>", unsafe_allow_html=True)
-    st.markdown("<h2 style='text-align: center; color: #00E5FF;'>🏢 Department Workspace Access</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #00E5FF; margin-top: 5rem;'>🏢 Department Workspace Access</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; color: #94A3B8;'>Provide authorized corporate Department ID parameters to unlock processing nodes.</p>", unsafe_allow_html=True)
     
-    with st.form("auth_gate"):
-        dept_input = st.text_input("Department ID", placeholder="e.g., DEPT-FINANCE-2026")
-        password_input = st.text_input("Security Access Password", type="password", placeholder="••••••••")
-        submit_button = st.form_submit_button("Authenticate Secure Session", use_container_width=True)
-        
-        if submit_button:
-            dept_db = CLIENT_CONFIG["VALID_DEPARTMENTS"]
-            if dept_input in dept_db and dept_db[dept_input] == password_input:
-                st.session_state.authenticated = True
-                st.session_state.auth_dept = dept_input
-                st.success("Authentication confirmed! Access Granted.")
-                st.rerun()
-            else:
-                st.error("Invalid Department Credentials. Access Denied.")
+    _, col2, _ = st.columns([1, 2, 1])
+    with col2:
+        with st.form("auth_gate"):
+            dept_input = st.text_input("Department ID", placeholder="e.g., DEPT-FINANCE-2026")
+            password_input = st.text_input("Security Access Password", type="password", placeholder="••••••••")
+            submit_button = st.form_submit_button("Authenticate Secure Session", use_container_width=True)
+            
+            if submit_button:
+                dept_db = CLIENT_CONFIG["VALID_DEPARTMENTS"]
+                if dept_input in dept_db and dept_db[dept_input] == password_input:
+                    st.session_state.authenticated = True
+                    st.session_state.auth_dept = dept_input
+                    st.success("Authentication confirmed! Access Granted.")
+                    st.rerun()
+                else:
+                    st.error("Invalid Department Credentials. Access Denied.")
 else:
-    st.set_page_config(page_title=CLIENT_CONFIG["APP_TITLE"], layout="wide")
-    st.markdown("<style>.stApp { background-color: #0B0F19 !important; color: #E2E8F0 !important; } [data-testid='stSidebar'] { background-color: #161F30 !important; border-right: 1px solid #1E293B; } .stChatInputContainer { border-radius: 12px !important; border: 1px solid #00E5FF !important; background-color: #161F30 !important; } .main-title { background: linear-gradient(90deg, #00E5FF, #8644FF); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 2.8rem; margin-bottom: 0rem; } .sub-title { color: #94A3B8; font-size: 1.1rem; font-style: italic; margin-top: -0.5rem; margin-bottom: 2rem; } .profile-box { background-color: #1E293B; padding: 12px; border-radius: 8px; border-left: 4px solid #00E5FF; margin-bottom: 15px; font-family: monospace; }</style>", unsafe_allow_html=True)
-
     with st.sidebar:
         st.markdown(f"<div class='profile-box'>🏢 <b>Active Corporate Area:</b><br>{st.session_state.auth_dept}</div>", unsafe_allow_html=True)
         st.header("📁 Corporate Data Source")
@@ -185,10 +273,8 @@ else:
                 retriever_obj = process_pdf(uploaded_file)
         
         st.markdown("---")
-        if st.button("🚪 Close Secure Session", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.auth_dept = ""
-            st.rerun()
+        if st.button("🔒 Close & Terminate Secure Session", type="secondary", use_container_width=True):
+            purge_secure_session()
 
     st.markdown(f'<p class="main-title">⚡ {CLIENT_CONFIG["APP_TITLE"]}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="sub-title">{CLIENT_CONFIG["SUBTITLE"]}</p>', unsafe_allow_html=True)
