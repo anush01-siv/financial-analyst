@@ -166,27 +166,38 @@ def retrieve_docs(state: GraphState):
     return {"context_docs": doc_texts}
 
 def sanitize_latex_output(text: str) -> str:
-    """Zero-error sanitizer: turns all LLM bracket blocks into native Streamlit KaTeX ($$...$$)."""
+    """
+    Universal LaTeX Sanitizer for Streamlit KaTeX.
+    Converts all raw LaTeX bracket blocks [ ... ] into native Streamlit KaTeX $$ ... $$ blocks.
+    """
     if not text:
         return ""
 
-    # 1. Catch ALL bracket math blocks [ ... ] and turn them into $$ ... $$
-    # Matches any '[' and ']' wrapping content containing backslashes, fractions, or math symbols
-    def bracket_to_katex(match):
-        inner_content = match.group(1).strip()
-        # Clean up LaTeX bracket artifact syntax
-        inner_content = inner_content.replace('{,}', ',').replace(';-;', '-')
-        return f"\n\n$${inner_content}$$\n\n"
+    # 1. Convert any bracketed LaTeX display block [\begin{aligned} ... \end{aligned}] to $$ \begin{aligned} ... \end{aligned} $$
+    text = re.sub(
+        r'\[\s*(\\begin\{aligned\}.*?\\end\{aligned\})\s*\]',
+        r'\n\n$$\1$$\n\n',
+        text,
+        flags=re.DOTALL
+    )
 
-    # Matches [ math_expression ]
-    text = re.sub(r'\[\s*([^\]\n]*?(?:\\|\+|\-|\*|\/|=|\%)[^\]\n]*?)\s*\]', bracket_to_katex, text)
+    # 2. Convert standard math brackets [ \text{...} ] or [ \frac{...} ] into $$ ... $$
+    text = re.sub(
+        r'\[\s*(\\text|\\frac|\\left|\\boxed|[0-9\.\,]+\s*\\times|\\begin).*?\s*\]',
+        lambda m: f"\n\n$${m.group(0).strip('[] ')}$$\n\n",
+        text,
+        flags=re.DOTALL
+    )
 
-    # 2. Hardened fallback for any stray bracket blocks left unhandled
-    text = re.sub(r'\\?\[\s*', '\n\n$$\n', text)
-    text = re.sub(r'\s*\\?\]', '\n$$\n\n', text)
+    # 3. Handle leftover bracket math expressions like [ 0.2623 \times 100 = 26.23% ]
+    text = re.sub(
+        r'\[\s*([^\]\n]*?(?:\\|\+|\-|\*|\/|=|\%)[^\]\n]*?)\s*\]',
+        lambda m: f"\n\n$${m.group(1).strip()}$$\n\n",
+        text
+    )
 
-    # 3. Clean up stray empty math blocks if any were created
-    text = text.replace("$$$$", "").replace("$$ $$", "")
+    # 4. Clean up KaTeX comma artifacts {,} -> ,
+    text = text.replace('{,}', ',')
 
     return text.strip()
 
