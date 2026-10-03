@@ -202,22 +202,28 @@ def execute_math_logic(state: GraphState):
     retriever = state["retriever"]
     llm = state["llm"]
     
-    has_explicit_numbers = any(char.isdigit() for char in question)
+    # 1. Strip year patterns (FY2025, 2024, 2025, 2026) to avoid false-positive skip on context retrieval
+    clean_q_for_check = re.sub(r'\b(19|20)\d{2}\b', '', question, flags=re.IGNORECASE)
+    clean_q_for_check = re.sub(r'fy\d{2,4}', '', clean_q_for_check, flags=re.IGNORECASE)
     
-    if has_explicit_numbers:
-        doc_texts = ["No document context required. Execute calculations using the numeric variables provided directly by the user in their prompt query sentence."]
+    # 2. Check if there are actual standalone numbers left in the prompt
+    has_raw_numeric_data = any(char.isdigit() for char in clean_q_for_check)
+    
+    if has_raw_numeric_data:
+        # Prompt contains explicit numbers to compute directly
+        doc_texts = ["Use the numeric variables provided directly in the user prompt sentence."]
     else:
+        # Fetch actual context from uploaded PDF!
         fetched_docs = retriever.invoke(question)
         doc_texts = [doc.page_content for doc in fetched_docs]
     
-    # DEMO-READY EXECUTIVE PROMPT: NO SCRATCHPAD MATH
     math_system_prompt = (
-        "You are an executive corporate financial analyst presenting to a Board of Directors.\n"
+        "You are an executive corporate financial analyst presenting to C-level leadership.\n"
         "Execute all complex calculations privately in your reasoning workflow.\n\n"
-        "STRICT OUTPUT REQUIREMENTS:\n"
-        "1. DO NOT show raw formulas, scratchpad steps, arithmetic expressions, or LaTeX notation (NO backslashes, NO brackets).\n"
-        "2. Start IMMEDIATELY with a clean, professional Markdown Table summarizing the figures.\n"
-        "3. Below the table, provide a concise 2-sentence Executive Key Takeaway.\n\n"
+        "STRICT FORMAT RULES:\n"
+        "1. DO NOT output raw LaTeX math syntax, backslashes, fractions (\\frac), or bracket math blocks [ ... ].\n"
+        "2. Present financial comparisons immediately in a clean Markdown table.\n"
+        "3. Below the table, provide a concise 2-sentence Executive Summary detailing key takeaways.\n\n"
         "Context:\n{context}"
     )
     
