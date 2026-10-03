@@ -210,8 +210,14 @@ def execute_math_logic(state: GraphState):
         fetched_docs = retriever.invoke(question)
         doc_texts = [doc.page_content for doc in fetched_docs]
     
+    # DEMO-READY EXECUTIVE PROMPT: NO SCRATCHPAD MATH
     math_system_prompt = (
-        "You are a forensic financial auditor. Perform step-by-step financial calculations based on the provided context.\n\n"
+        "You are an executive corporate financial analyst presenting to a Board of Directors.\n"
+        "Execute all complex calculations privately in your reasoning workflow.\n\n"
+        "STRICT OUTPUT REQUIREMENTS:\n"
+        "1. DO NOT show raw formulas, scratchpad steps, arithmetic expressions, or LaTeX notation (NO backslashes, NO brackets).\n"
+        "2. Start IMMEDIATELY with a clean, professional Markdown Table summarizing the figures.\n"
+        "3. Below the table, provide a concise 2-sentence Executive Key Takeaway.\n\n"
         "Context:\n{context}"
     )
     
@@ -221,12 +227,9 @@ def execute_math_logic(state: GraphState):
     ])
     
     math_chain = math_prompt | llm | StrOutputParser()
-    raw_result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
+    result = math_chain.invoke({"context": "\n\n".join(doc_texts), "input": question})
     
-    # Clean output through the multi-pass sanitizer
-    clean_result = sanitize_latex_output(raw_result)
-    
-    return {"generation": clean_result, "context_docs": doc_texts}
+    return {"generation": result, "context_docs": doc_texts}
 
 def generate_standard_answer(state: GraphState):
     if state.get("generation"):
